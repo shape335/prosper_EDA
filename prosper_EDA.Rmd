@@ -1,0 +1,604 @@
+
+---
+title: "Prosper Loan Exploratory Data Analysis"
+output: rmarkdown::github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(fig.path = "README_figs/README-")
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, packages}
+library(GGally)
+library(scales)
+library(memisc)
+library(lattice)
+library(MASS)
+library(car)
+library(reshape2)
+library(dplyr)
+```
+
+
+
+```{r echo=FALSE, Load_the_Data}
+# Load the Data
+loan_data = read.csv('prosperLoanData.csv')
+borrowerloan <- subset(loan_data, select = c(5,6,8,9,20, 22, 26,27, 47,48,50, 64,68))
+```
+
+
+```{r echo=FALSE, Load_the_Data2}
+# convert categorical variables from integer to factorial
+borrowerloan$Term <- as.factor(borrowerloan$Term)
+```
+
+The size of the prosper dataset is very large with 81 variables and ~114,000 data points concerning both investers and borrowers. I choose variables that are of interest to borrowers and reduced the number of variable size to 13. The main variable of interest is loan amount.
+
+
+
+# Univariate Plots Section
+
+First, I looked at each of the 13 variable.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, Univariate_Plot1}
+
+library(gridExtra) # grid arrange library
+
+g1 = ggplot(data = borrowerloan, aes(x = LoanOriginalAmount))+
+  geom_histogram(color = 'blue', binwidth = 1000)+
+  scale_x_continuous( name = 'Original Loan Amount', breaks = seq(0,40000,4000))
+
+g2 = ggplot(data = borrowerloan, aes(x = LoanOriginalAmount))+
+  geom_histogram(color = 'blue', binwidth = 0.1)+
+  scale_x_continuous(breaks = c(1000,2000, 4000, 7000, 10000, 14000,20000,30000),
+                     trans = 'log', name = "Original Loan Amount(log10)" ) # Transforms data 
+
+grid.arrange(g1, g2)
+```
+
+
+```{r echo=FALSE, Univariate_Plot2}
+m1 = ggplot(data = borrowerloan, aes(x = MonthlyLoanPayment))+
+  geom_histogram(color = 'darkgreen', binwidth = 50)+
+  scale_x_continuous(name = 'Monthly Loan Payments', breaks = seq(0,2000, 200))
+m2 = ggplot(data = borrowerloan, aes(x = MonthlyLoanPayment))+
+  geom_histogram(color = 'darkgreen', binwidth = 1)+
+  scale_x_continuous(name = 'Monthyl Loan Payments(sqrt)', trans = 'sqrt',
+                     breaks = c(10, 50, 250,500,750,100,1500))
+
+grid.arrange(m1, m2)
+
+summary(borrowerloan$MonthlyLoanPayment)
+```
+
+The price distribution of both the loan amount and monthly payment variables had a long tailed plot so I transformed the x-axis with log10 and square root, respectively. The transformed graph shows smaller values that were hidden previously. For the loan amount histogram, there are a significant amount of loans priced between 4000 and 14000. If we take a summary of the variable we find that 50% of the loans are actually between 4000 and 12000.
+
+The next two main variables I plotted were interest rate and APR since APR is related to interest rate. I looked at the summary table and boxplot plot below.
+
+```{r echo=FALSE, Univariate_Plot3}
+t1 = ggplot(data = subset(borrowerloan, !is.na(borrowerloan$BorrowerRate)), aes(y = BorrowerRate))+ 
+  geom_boxplot()
+t2 = ggplot(data = subset(borrowerloan, !is.na(borrowerloan$BorrowerAPR)), aes(y = BorrowerAPR))+ 
+  geom_boxplot()  
+
+grid.arrange(t1,t2,ncol = 2)
+
+summary(borrowerloan$BorrowerRate)
+
+summary(borrowerloan$BorrowerAPR)
+```
+
+The interquartile range(IQR) for APR is larger than the interest rate value. APR is the interest rate plus additional cost of taking out a loan and is the primary reason why the median and the IQR has a higher value. 
+
+
+```{r echo=FALSE,message=FALSE, warning=FALSE, Univariate_Plot4}
+z1 = ggplot(borrowerloan, aes(x = StatedMonthlyIncome)) + geom_histogram(binwidth = 75)+
+  scale_x_continuous()
+  
+z2 = ggplot(borrowerloan, aes(x = StatedMonthlyIncome)) + geom_histogram(binwidth = 75)+
+  scale_x_continuous(lim = c(0,quantile(borrowerloan$StatedMonthlyIncome,0.99)))
+
+grid.arrange(z1,z2,ncol = 2)
+summary(borrowerloan$StatedMonthlyIncome)
+```
+
+
+```{r echo=FALSE,message=FALSE, warning=FALSE, Unvariate_Plot5}
+r1 =  ggplot(data = borrowerloan, aes(x = DebtToIncomeRatio)) + geom_histogram(binwidth = 0.005)+
+  scale_x_continuous()
+
+r2 = ggplot(data = borrowerloan, aes(x = DebtToIncomeRatio)) + geom_histogram(binwidth = 0.005)+
+  scale_x_continuous(lim = c(0, quantile(!is.na(borrowerloan$DebtToIncomeRatio),0.99))) # lim: removes the top 1 % data points from the graph
+
+grid.arrange(r1, r2 , ncol = 2)
+
+summary(borrowerloan$DebtToIncomeRatio)
+```
+
+
+I did not transformed the axis but instead removed any values from the ggplot that were not within 99 percent of the distribution.  The top 1% values for monthly income and debt to income ratio skewed the graphs.
+
+```{r echo=FALSE,message=FALSE, warning=FALSE, Univariate_Plot6}
+# Creating new variable
+borrowerloan$MeanCredit <- rowMeans(subset(borrowerloan, 
+                                           select = c(CreditScoreRangeUpper,CreditScoreRangeLower)),
+                                    na.rm = TRUE)
+
+ggplot(data = borrowerloan, aes(x = MeanCredit))+ 
+  geom_histogram(binwidth = 10)
+  
+summary(borrowerloan$MeanCredit)
+```
+
+I created a new variable called MeanCredit which took the mean of the lower and upper creditscores variables. The graph shows mean credit scores that are have very low values.
+
+#### Next, I focused on categorical variables.
+
+I re-categorize the income range variables by merging borrowers that labeled "not employed" and borrower that labeled "$0"
+
+```{r echo=FALSE,message=FALSE, warning=FALSE, Univariate_Plot7}
+# Re-categorizing and ordering labels in the variabel Income Range
+
+levels(borrowerloan$IncomeRange) <- list('Not employed' = c('$0', 'Not employed'), '$1-24,999' = ('$1-24,999'), '$25,000-49,999' = ('$25,000-49,999') ,'$50,000-74,999' = ('$50,000-74,999'), '$75,000-99,999' = ('$75,000-99,999'),
+                                       '$100,000+' = ('$100,000+'),  'Not displayed' = ('Not displayed') )
+borrowerloan$IncomeRange <- ordered(borrowerloan$IncomeRange, 
+                            levels = c('Not employed', 'Not displayed', '$1-24,999','$25,000-49,999', '$50,000-74,999', '$75,000-99,999', '$100,000+'))
+
+# Plotting the newly categorized labels
+ggplot(data = borrowerloan, aes(x = IncomeRange ))+ geom_bar()+
+  theme(axis.text.x = element_text( angle = 90))
+
+summary(borrowerloan$IncomeRange)
+```
+
+The majority of Prosper Loan borrowers have an income range between $25,000 - 74,999. Interestingly, borrowers that did not disclose there income received more loans than borrowers with an income range between 1-24,999.
+
+
+I re-categorized the employment status variable by merging borrowers labeled as employed, full-time, part-time, and self-employed. I also merged borrowers labeled as "not employed" and "Not available".
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, Univariate_Plot8}
+# Re-categorizing  and ordering labels in the variabel Employment Status
+
+levels(borrowerloan$EmploymentStatus) = list("Employed(full/self/part-time)" = c("Employed", "Full-time", "Part-time", "Self-employed"),  "Not employed" = c("Not employed", "Not available"), "Other" = "Other","Retired" = "Retired" )
+borrowerloan$EmploymentStatus <- ordered(borrowerloan$EmploymentStatus, 
+                            levels = c("Employed(full/self/part-time)", "Not employed" ,"Other", "Retired"))
+
+# Plotting the newly categorized labels
+ggplot(data = subset(borrowerloan, !is.na(borrowerloan$EmploymentStatus)), aes(x = EmploymentStatus)) + geom_histogram(stat = "count")
+summary(borrowerloan$EmploymentStatus)
+```
+
+The employment status variable shows that most borrowers have some type of job before applying for a loan. 
+
+
+
+
+
+Finally, I re-categorized the loan status variable. Any borrower that has a past due on there profile was merged together.
+
+```{r echo=FALSE,message=FALSE, warning=FALSE, Univariate_Plot9}
+# Re-categorizing  and ordering labels in the variabel Loan Status
+
+levels(borrowerloan$LoanStatus) =  list( "Past Due/Defaulted/Chargedoff" = c("Past Due (>120 days)", "Past Due (1-15 days)", "Past Due (16-30 days)","Past Due (31-60 days)",  "Past Due (61-90 days)", "Past Due (91-120 days)", "Defaulted", "Chargedoff" ), "Current" = c("Current", "FinalPaymentInProgress"), "Completed" = "Completed", "Cancelled" = "Cancelled")
+
+borrowerloan$LoanStatus = ordered(borrowerloan$LoanStatus, 
+                            levels = c("Current", "Completed","Past Due/Defaulted/Chargedoff", "Cancelled"))
+# Plotting graph
+ggplot(data = borrowerloan, aes(x = LoanStatus)) + geom_histogram(stat = "count")+
+  theme(axis.text.x = element_text( angle = 90))
+summary(borrowerloan$LoanStatus)
+```
+
+
+
+Lastly, I looked at the number of loan terms for 12, 36, and 60 months. 
+
+```{r echo=FALSE,message=FALSE, warning=FALSE, Univariate_Plot10}
+ggplot(data = borrowerloan, aes(x = Term)) + geom_histogram( stat = "count") 
+
+summary(borrowerloan$Term)
+```
+
+The majority of loans had a payback term of 3 years.
+
+The two variables that had outliers which could be ignored were monthly income and mean creditscore. The outliers from monthly income were around $150000 a month, 20 times more than the third quartile. The outliers for mean creditscore were zeros. 
+
+```{r echo=FALSE, New_variable}
+# subsetting a new datatable by removing outliers from Monthly Income and Mean Credit variables.
+
+borrowerloan = subset(borrowerloan, 
+                      (borrowerloan$StatedMonthlyIncome < quantile(borrowerloan$StatedMonthlyIncome, 0.99) &
+                                       borrowerloan$MeanCredit > quantile(borrowerloan$MeanCredit, 0.01, na.rm = TRUE)))
+```
+
+
+
+# Univariate Analysis
+
+### What is the structure of your dataset?
+
+I subset the prosper loan dataset to only include 15 variables. I ran a univariate analysis on 11 ( loan amount, monthly payment, APR, interest rates, monthly income, debt to income ratio, income range, mean credit score, employment status, loan term, loan status)
+
+Main observations:
+ - The median loan amount 6500 with a max loan amount of 3500
+ - The median monthly payment is 212
+ - 75% of the interest rates and APR were under 0.25 and 0.2838
+ - Most borrowers have an income range between 25,000 and 74,999
+ - Media Debt to Icome ratio is 0.22 when including outliers
+ - Median Monthly Income is 4667 when including outliers
+
+
+### What is/are the main feature(s) of interest in your dataset?
+
+The main feature in the data set are loan amount and the monthly payments. I'd like to know which feature best predicts the price of the loan amount borrowers can get from prosper loan. 
+
+### What other features in the dataset do you think will help support your \
+investigation into your feature(s) of interest?
+
+Monthly Income, Debt to Income Ratio, Term, Income Range, Mean CreditScore will most probably affect the price of the loan.
+
+
+### Did you create any new variables from existing variables in the dataset?
+
+The new variable, Credit Mean, took the mean of the lower and upper credit score variables.
+
+### Of the features you investigated, were there any unusual distributions? \
+Did you perform any operations on the data to tidy, adjust, or change the form \
+of the data? If so, why did you do this?
+
+I subset the prosper loan data for variables that were of interest to borrowers.
+I also removed large outliers for variables that clearly were not correct values so that the distribution would not be skewed.
+I also changed merged some of the categories for the categorical variables since there were some redundancies. 
+The categorical variable employment status can be ignored since such a large percentage(90%) of borrower are in the employed category
+
+
+
+
+# Bivariate Plots Section
+
+
+```{r echo=FALSE,message=FALSE, warning=FALSE,fig.width=12, fig.height=12, correlation_matrix}
+# Creating a correlation matrix with a sample set of 10000
+
+features1 = borrowerloan[ , c(3,4,9,11:14)]
+
+set.seed(1111)
+features_samp1 = features1[sample(1: length(features1$LoanOriginalAmount),10000), ]
+ggpairs(features_samp1, 
+        lower = list(continuous = wrap("points", shape = I('.'))),
+        upper = list(combo = wrap("box", outlier.shape = I('.'))))
+```
+
+The correlation graph generated by a sample data set shows a strong correlation between loan amount and monthly payments. There are a several medium correlations(0.3-0.7) that affect loan amount such as monthly income, APR, interests, credit mean. I am interested in investigating quantitative variables that affect loan amount indirectly, such as mean credit and APR.
+
+
+```{r echo=FALSE, Bivariate_Plot1}
+ggplot(data = borrowerloan, aes(x = MonthlyLoanPayment, y = LoanOriginalAmount )) + geom_jitter( alpha = 1/10) +
+  scale_x_continuous()
+
+# Formulating a linear model between monthly payment and loan amount
+linear <- lm(formula = LoanOriginalAmount ~ MonthlyLoanPayment, data = borrowerloan)
+summary(linear)
+```
+
+The relationship between loan price and monthly payment appears to be linear yet there are 4 distict lines that stem from the zero axis in different direction. I wonder what the reasos for those 4 distict lines are?
+The monthly loan payment explain 87% of the variance in the loan amount based on the R^2 value.
+
+Next, I'll look at the APR and interests.
+
+```{r echo=FALSE, Bivariate_Plot2}
+ggplot(data = borrowerloan, aes(x = BorrowerAPR , y = LoanOriginalAmount)) + geom_jitter( alpha = 1/10) +
+  scale_x_continuous()
+```
+
+
+
+```{r echo=FALSE, Bivariate_Plot3}
+ggplot(data = borrowerloan, aes(x = BorrowerRate , y = LoanOriginalAmount )) + geom_jitter( alpha = 1/10) +
+  scale_x_continuous()
+```
+
+There's some negative correlation between loan amount and both APR and Interests.
+
+
+```{r echo=FALSE, Bivariate_Plot4}
+ggplot(data = borrowerloan, aes(x = (StatedMonthlyIncome) , y =  LoanOriginalAmount )) + geom_jitter( alpha = 1/10) +
+  scale_x_continuous()
+```
+
+The monthly income of borrowers positively correlates with the loan amount recieved.
+
+
+```{r echo=FALSE, Bivariate_Plot5}
+ggplot(data = borrowerloan, aes(x = MeanCredit , y = LoanOriginalAmount)) + geom_jitter( alpha = 1/10) +
+  scale_x_continuous()
+```
+
+There's also a positive correlation between the mean credit score and the original loan amount.
+
+
+I'd like to see if there's a correlation between monthly loan payment and monthly income. 
+
+```{r echo=FALSE, Bivariate_Plot6}
+ggplot(data = borrowerloan, aes(x = StatedMonthlyIncome , y =  MonthlyLoanPayment)) + geom_jitter( alpha = 1/10) +
+  scale_x_continuous()
+```
+
+Interestingly, the scatter plot reaches a plateu.
+
+
+
+Next, I'll look at categorical variables and how they vary with monthly payment and loan amount.
+
+```{r echo=FALSE, Bivariate_Plot7}
+ggplot(data = borrowerloan, aes(x = Term , y =  MonthlyLoanPayment )) + geom_boxplot()
+
+# Code for descriptive statistics between loan terms and monthly loan payments
+by(borrowerloan$MonthlyLoanPayment, borrowerloan$Term, summary)
+```
+
+
+Median monthly payments are largest for borrowers with a  5 year loan term and borrowers with a 3 year loan term have the lowest median monthly loan payment. 
+
+```{r echo=FALSE, Bivariate_Plot8}
+ggplot(data = borrowerloan, aes(x = LoanStatus , y =  MonthlyLoanPayment )) + geom_boxplot()
+
+by(borrowerloan$MonthlyLoanPayment, borrowerloan$LoanStatus, summary)
+```
+
+Borrowers with completed loans paid  slightly lower median monthly payment as past due borrowers.
+
+
+
+```{r echo=FALSE, Bivariate_Plot9}
+ggplot(data = borrowerloan, aes(x = IncomeRange , y =  MonthlyLoanPayment )) + geom_boxplot()
+```
+
+
+```{r echo=FALSE, Bivariate_summary}
+by(borrowerloan$MonthlyLoanPayment, borrowerloan$IncomeRange, summary)
+```
+
+
+Borrowers with higher incomes receive larger amounts of loans. What's interesting is borrowers that have an income of zero or did not report their income have larger median loans compared to people with an income range of $1-$4999. 
+
+
+
+```{r echo=FALSE, Bivariate_Plot10}
+ggplot(data = borrowerloan, aes(x = IsBorrowerHomeowner , y =  MonthlyLoanPayment )) + geom_boxplot()
+
+by(borrowerloan$MonthlyLoanPayment, borrowerloan$IsBorrowerHomeowner, summary)
+```
+
+Borrowers with home ownership have larger median monthly payment.
+
+```{r echo=FALSE, Bivariate_Plot11}
+ggplot(data = borrowerloan, aes(x = Term , y = LoanOriginalAmount)) + geom_boxplot() +
+  theme(axis.text.x = element_text( angle = 90))
+  
+by(borrowerloan$LoanOriginalAmount, borrowerloan$Term, summary)
+```
+
+Loan terms of 5 years have the largest median laons.
+
+
+
+
+```{r echo=FALSE, Bivariate_Plot12}
+ggplot(data = borrowerloan, aes(x = LoanStatus , y = LoanOriginalAmount)) + geom_boxplot() +
+  theme(axis.text.x = element_text( angle = 90))
+  
+by(borrowerloan$LoanOriginalAmount, borrowerloan$LoanStatus, summary)
+```
+
+```{r echo=FALSE, Bivariate_Plot13}
+ggplot(data = borrowerloan, aes(x = IncomeRange , y = LoanOriginalAmount)) + geom_boxplot() +
+  theme(axis.text.x = element_text( angle = 90))
+  
+by(borrowerloan$LoanOriginalAmount, borrowerloan$LoanStatus, summary)
+```
+
+
+```{r echo=FALSE, Bivariate_summary2}
+by(borrowerloan$LoanOriginalAmount, borrowerloan$IncomeRange, summary)
+```
+
+
+
+```{r echo=FALSE, Bivariate_Plot14}
+ggplot(data = borrowerloan, aes(x = IsBorrowerHomeowner , y = LoanOriginalAmount)) + geom_boxplot() +
+  theme(axis.text.x = element_text( angle = 90))
+  
+by(borrowerloan$LoanOriginalAmount, borrowerloan$IsBorrowerHomeowner, summary)
+```
+
+It makes sense that home owners receive larger median loans. Home owners receive a median amount 1.5 times more than no home owners.
+
+
+```{r echo=FALSE, Bivariate_Plot15}
+ggplot(data = borrowerloan, aes(y = MeanCredit , x = BorrowerRate)) + geom_jitter()
+```
+
+Mean credit is strongly and negatively correlated with interest rates. The same is true with APR.
+
+
+# Bivariate Analysis
+
+### Talk about some of the relationships you observed in this part of the investigation. How did the feature(s) of interest vary with other features in the dataset?
+
+There's a strong correlation between loan amount and monthly payment. The R^2 value indicates monthly loan payments accounts for 87% variance in loan amount. Possibly, other relationships can be used in the model to explain variation in price.
+
+APR and interest rate have a negative medium strength correlation with loan amount. Large loans tend to have lower APR and interest rates.
+
+Monthly income and loan amount and mean credit and loan amount have a medium strength positive correlation.
+
+Borrowers with higher income range receive larger loans and naturally employment status effects the size of a loans. Additionally, home owners and longer loan terms receive larger loans.
+
+### Did you observe any interesting relationships between the other features (not the main feature(s) of interest)?
+
+There's a positive correlation between mean credit scrores and both interest rates and APR. 
+
+### What was the strongest relationship you found?
+
+The loan amount is postively and strongly correlated with monthly loan payments. The monthly income and mean credit positively correlate with loan amount but with a medium strength. Also, APR and interest rate negatively and with medium strength correlated with loan amount.  All of these variables could be used to form a predictive model for the loan amount borrowers from prosper loan can receive.
+
+
+
+
+# Multivariate Plots Section
+
+```{r echo=FALSE, Multivariate_Plot1}
+ggplot(data = borrowerloan, aes(y = LoanOriginalAmount, x = MonthlyLoanPayment, color = borrowerloan$StatedMonthlyIncome)) + geom_jitter()+ scale_colour_distiller(palette = "RdYlGn") # ggplot with third variable
+```
+
+Although loan amounts correlates with both monthly loan payments and monthly income it is difficult to visualize in this graph. I'd still like to put monthly income variable in my linear model to see if it's a good predicter of loan amount.
+
+```{r echo=FALSE, Multivariate_Plot2}
+ggplot(data = borrowerloan, aes(y = LoanOriginalAmount, x = MonthlyLoanPayment, color = borrowerloan$MeanCredit)) + geom_jitter()+ scale_colour_distiller(palette = "PuOr")
+```
+
+The mean credit score gives a slightly lower monthly payment price.
+
+
+
+```{r echo=FALSE, Multivariate_Plot3}
+ggplot(data = borrowerloan, aes(y = LoanOriginalAmount, x = MonthlyLoanPayment, color = borrowerloan$BorrowerRate)) + geom_jitter()+ scale_colour_distiller(palette = "PiYG")
+```
+
+```{r echo=FALSE, Multivariate_Plot4}
+ggplot(data = borrowerloan, aes(y = LoanOriginalAmount, x = MonthlyLoanPayment, color = borrowerloan$BorrowerAPR)) + geom_jitter()+ scale_colour_distiller(palette = "BrBG")
+```
+
+The pattern holds nearly the same for APR and interest rates with higher interests rates producing higher monthly payments.
+
+
+```{r echo=FALSE, Multivariate_Plot5}
+ggplot(data = borrowerloan, aes(y = LoanOriginalAmount, x = MonthlyLoanPayment, color = borrowerloan$Term)) + geom_jitter(alpha = 1/2)+ scale_colour_brewer(palette = "Set1")
+```
+
+Loan terms hevaily influence loan amounts based on this graph. 
+
+
+```{r echo=FALSE, Multivariate_Plot6}
+ggplot(data = borrowerloan, aes(y = LoanOriginalAmount, x = MonthlyLoanPayment, color = borrowerloan$IncomeRange)) + geom_jitter()+ 
+  scale_colour_brewer(palette = "YlOrBr")
+```
+
+It isn't clear if income range effects the loan amount.
+
+
+```{r echo=FALSE, Multivariate_Plot7}
+ggplot(data = borrowerloan, aes(y = LoanOriginalAmount, x = MonthlyLoanPayment, color = borrowerloan$IsBorrowerHomeowner)) + geom_jitter(alpha = 1/2)+ scale_colour_brewer(palette = "Set1")
+```
+
+Monthly payment doesn't seem correlated with home ownership however borrowers with high monthly payments and hight loan amounts are likely not home owners. Additionally, borrowers with 1 year loan terms where for the most part not homeowners. 
+
+
+### Linear Model Regression
+
+
+```{r echo=FALSE, linear_model}
+
+# A linear model regression for 5 variables. 
+
+s1 <- lm(formula = LoanOriginalAmount ~ MonthlyLoanPayment, data = borrowerloan)
+s2 <- lm(formula = LoanOriginalAmount ~ MonthlyLoanPayment + Term, data = borrowerloan)
+s3 <- lm(formula = LoanOriginalAmount ~ MonthlyLoanPayment + Term + BorrowerRate, data = borrowerloan)
+s4 <- lm(formula = LoanOriginalAmount ~ MonthlyLoanPayment + Term + BorrowerRate + BorrowerAPR, data = borrowerloan)
+s5 <- lm(formula = LoanOriginalAmount ~ MonthlyLoanPayment + Term + BorrowerRate + BorrowerAPR + StatedMonthlyIncome, data = borrowerloan)
+
+mtable(s1, s2, s3, s4, s5, sdigits = 3)
+```
+
+
+The variables in the linear model account for 95% of the variance in loan amount. The loan term variable accounts for 7% increase in loan amount variance.
+
+
+# Multivariate Analysis
+
+### Talk about some of the relationships you observed in this part of the investigation. Were there features that strengthened each other in terms of looking at your feature(s) of interest?
+
+The loan amount and monthly payment was significantly higher for shorter loan terms. The monthly loans varied with both APR and interest rates when holding loan amount constant. 
+
+All four features, loan term, interest rates, and APR when plotted with monthly payments and loan amount suggested I can make a linear model to predict the loan price. 
+
+
+### Were there any interesting or surprising interactions between features?
+
+I was suprised that monthly income, income range, and mean credit did not incorporate variation to loan amount. 
+
+### Did you create any models with your dataset? Discuss the strengths and limitations of your model.
+
+I created a linear model with loan amount and monthly loan payments. The 5 variables accounted for 95.1% of the variation in amount of loan a borrower received. Interest rates and loan terms are features which increased the R^2 value from 87% to 95$. Features such as monthly income, APR, and monthly income slightly improved the R^2 value if at all. The term on the loan had the largest effect on loan amount. The prosper loan data set is not up to date with information only from 2005 to 2014. This could create limitation in the linear model.
+
+
+
+
+
+------
+
+# Final Plots and Summary
+
+### Plot One
+```{r echo=FALSE, Plot_One}
+
+ggplot(data = borrowerloan, aes(x = MonthlyLoanPayment, y = LoanOriginalAmount )) + geom_jitter() +
+  scale_x_continuous( name = "Monthly Loan Payments(in dollars)")+
+  scale_y_continuous(name = "Loan Amount(in dollars)")
+```
+
+### Description One
+
+The amount of loan appears to correlates with the monthly loan payments. The graph has distict lines that stem from the orgin of the graph.
+
+### Plot Two
+```{r echo=FALSE, Plot_Two}
+# A side by side comparison between two box plots
+
+t1 <- ggplot(data = borrowerloan, aes(x = Term , y =  MonthlyLoanPayment, fill = Term)) +
+  scale_x_discrete(name = "Lenght of Term (in months)")+
+  scale_y_continuous(lim = c(0,1000), name = "Monthly Loan Payments (in dollars)")+
+  geom_boxplot() + scale_fill_brewer(palette = "Set1")
+
+
+
+t2 <- ggplot(data = borrowerloan, aes(x = Term , y = LoanOriginalAmount, fill = Term)) +
+  scale_x_discrete( name = "Lenght of Term (in months)")+
+  scale_y_continuous(lim = c(0,20000), name = "Loan Amount (in dollars)")+
+  geom_boxplot() + scale_fill_brewer(palette = "Set1")
+
+grid.arrange(t1, t2, ncol = 1)
+
+```
+
+### Description Two
+
+Loan amounts are generally higher for longer term lenghts. The 5 year term lenght has the highest median. The median monthly loan payments for 3 year terms are the lowest.
+
+### Plot Three
+```{r echo=FALSE, Plot_Three}
+
+ggplot(data = borrowerloan, aes(y = LoanOriginalAmount, x = MonthlyLoanPayment, color = Term)) + geom_jitter(alpha = 1/2)+
+  scale_colour_brewer(palette = "Set1")+
+  scale_x_continuous(name = "Monthly Loan Payments(in dollars)")+
+  scale_y_continuous(name = "Loan Amount (in dollars)")
+  
+
+```
+
+### Description Three
+
+The plot indicates that a linear model could be created to predict the loan amount with the monthly loan payment variabel and the loan amount variable. The loan amount varies with loan term. The longer loan terms are almost always larger in loan amounts than shorter loan terms.
+
+
+
+------
+
+# Reflection
+
+The propser loan data set had 81 variables with 113937 variables from 2005 to 2014. My first step was to formulate a research topic, What information effects the amount of loan a borrower could receive from Prosper?. I then started by understanding each of the 81 variables and picked 13 of them. I explore the relationship between the 12 variables and the amount of loan each borrower from prosper data recieves and created a linear model to predict the amount of loan a borrower can get from prosper. 
+
+In the bivariate analysis, I created a correlation matrix between all of the quantitative variables. The amount of loan and monthly payments correlated at 0.93. I struggled to create a correlation matrix with categorical variables and had to compare each categorical variable with monthly loan and loan amount. I was surprised that monthly income. mean credit score, and  income range did not contribute to a large variation in loan amount. 
+
+Some of the limitation of the model include the data. The loans listed in the data are from 2005 to 2014 and does not account for new methods Prosper uses for determining the amount of loans to give out. For future work on this data, I would investigate the values of zero for monthly payments. I would also be interested in evaluating the the amount of loans given to borrowers with an income range of "Not Employed". It surprises me that these borrowers had higher median loan amounts than borrowers with median income range of $1-$24,999.
