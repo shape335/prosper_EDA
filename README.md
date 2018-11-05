@@ -4,7 +4,7 @@ by Shan Jafri
 
 Introduction
 ========================
-Prosper loan is a peer-to-peer lending platform
+Prosper loan is a peer-to-peer lending platform. I extracted the data from their website then conducted an exploratory data analysis to find any trends within the dataset. 
 
 The size of the prosper dataset is very large with 81 variables and ~114,000 data points concerning both investers and borrowers. I choose variables that are of interest to borrowers and reduced the number of variable size to 13. The main variable of interest is loan amount.
 
